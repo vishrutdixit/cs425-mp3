@@ -386,220 +386,6 @@ void multicast_send(const char * message, int len){
 }
 
 /**
- * The multicast method used for eventual-consistency read and write messages
- */
-void eventual_send(const char* message, int len, int num_replicas){
-    int i = 0;
-    //Increment this process's timestamp
-    processes[process_id].timestamp += 1;
-    message_counter+=1;
-    num_replicas-=1;
-    for(auto kv : processes){
-        int dest = kv.first;
-        if (dest == process_id) continue;
-        struct connection info = kv.second;
-        if(info.server_fd == -1) continue;
-        std::cout << KRED << "Sent \"" << message << "\" to process " << dest << ", system time is " << get_time() << RST << std::endl;
-        // Send a message with simulated delay
-        std::thread t(delayed_usend, message, len, info.server_fd);
-        t.detach();
-        i+=1;
-        if(i == num_replicas) break;
-    }
-    std::thread t(delayed_usend, message, len, processes[process_id].server_fd);
-    t.detach();
-}
-
-/**
- * The unicast method used for replying to eventual-consistency read messages
- */
-void eventual_reply(struct message m){
-    std::cout << m.pid << " " << m.text << " " << m.id << std::endl;
-    struct connection info = processes[m.pid];
-    char* message = new char[2 + 2*sizeof(int) + sizeof(__int64_t)];
-    message[0] = 'R';
-    message[1] = m.text[1];
-    if(dict.find(m.text[1]) == dict.end()){
-        *((int*)(message + 2)) = 0;
-        *((int*)(message + 2 + sizeof(int))) = m.id;
-        *((__int64_t*)(message + 2 + 2*sizeof(int))) = 0;
-    }
-    else {
-        *((int*)(message + 2)) = dict[m.text[1]].value;
-        *((int*)(message + 2 + sizeof(int))) = m.id;
-        *((__int64_t*)(message + 2 + 2*sizeof(int))) = dict[m.text[1]].time;
-    }
-    std::thread t(delayed_usend, message, 2 + 2*sizeof(int) + sizeof(__int64_t), info.server_fd);
-    t.detach();
-}
-
-/**
- * Issue a GET command to the distributed key-value store
- */
-void kvstore_get(std::string keyname){
-    std::cout << KRED << "GET \"" << keyname << "\", system time is " << get_time() << RST << std::endl;
-    if(is_causally_ordered){
-        // Log beginning of GET request
-        ofs << 425 << ',' << process_id << ',' << "get" << ',' << keyname << ',' << get_ms() << ',' << "req" << std::endl;
-    }
-    else
-    {   // Log beginning of GET request
-        ofs << 425 << ',' << process_id << ',' << "get" << ',' << keyname << ',' << counter << ',' << "req" << std::endl;
-    }
-    // Create message
-    char* message = new char[2 + sizeof(int)];
-    message[0] = 'r';
-    message[1] = keyname[0];
-    if(is_causally_ordered){ // If we're using eventual
-        *((int*)(message+2)) = message_counter;
-        struct reply r;
-        r.num = 0;
-        r.value = 0;
-        r.time = 0;
-        std::pair<int, struct reply> entry(message_counter, r);
-        reply_dict.insert(entry);
-        eventual_send(message, 2+sizeof(int), R);
-    }
-    else {
-        multicast_send(message, 2);
-    }
-}
-
-/**
- * Issue a PUT command to the distributed key-value store
- */
-void kvstore_put(std::string keyname, int value){
-    std::cout << KRED << "PUT {\"" << keyname << "\", " << value << "} system time is " << get_time() << RST << std::endl;
-    if(is_causally_ordered){ // If we're using eventual
-        // Log beginning of PUT request
-        ofs << 425 << ',' << process_id << ',' << "put" << ',' << keyname << ',' << get_ms() << ',' << "req" << ',' << value << std::endl;
-    }
-    else {
-        // Log beginning of PUT request
-        ofs << 425 << ',' << process_id << ',' << "put" << ',' << keyname << ',' << counter << ',' << "req" << ',' << value << std::endl;
-    }
-    // Create message
-    char* message = new char[2 + sizeof(int)];
-    message[0] = 'w';
-    message[1] = keyname[0];
-    *((int*)(message + 2)) = value;
-    *((__int64_t*)(message + 2 + sizeof(int))) = get_ms();
-    if(is_causally_ordered){ // If we're using eventual
-        eventual_send(message, 2+sizeof(int)+sizeof(__int64_t), W);
-    }
-    else {
-        multicast_send(message, 2+sizeof(int));
-    }
-    free(message);
-}
-
-/**
- * Fill message member values and print delivery messages to standard out
- */
-void kvstore_delivered(struct message& m, char* read_bytes, int offset){
-    m.text = m.text.substr(0,2);
-
-    if(m.text[0] == 'w'){
-        m.value = *((int*) (read_bytes+offset+2) );
-        if(is_causally_ordered){
-            m.time = *((__int64_t*) (read_bytes+offset+2+sizeof(int)));
-            delivered(m.pid, "Write(" +  m.text.substr(1,1) + ", " + std::to_string(m.value) + ") at " + std::to_string(m.time));
-        }
-        else{
-            delivered(m.pid, "Write(" +  m.text.substr(1,1) + ", " + std::to_string(m.value) + ")");
-        }
-    }
-    else if (m.text[0] == 'r'){
-        if(is_causally_ordered){
-            m.id = *((int*) (read_bytes+offset+2) );
-            delivered(m.pid, "Read(" +  m.text.substr(1,1) + ")" + " with id " + std::to_string(m.id));
-        }
-        else {
-            delivered(m.pid, "Read(" +  m.text.substr(1,1) + ")");
-        }
-    }
-    else if(m.text[0] == 'R'){
-        m.value = *((int*) (read_bytes+offset+2) );
-        m.id = *((int*) (read_bytes+offset+2+sizeof(int)) );
-        m.time = *((__int64_t*) (read_bytes+offset+2+2*sizeof(int)));
-        std::cout << m.pid << " " << m.text << " " << m.id << " " << m.value << " " << m.time << std::endl;
-        delivered(m.pid, "Reply(" +  m.text.substr(1,1) + "," + std::to_string(m.value) +")" + " with id " + std::to_string(m.id) + " time " + std::to_string(m.time));
-    }
-}
-
-/**
- * Handle message receivals and print receival messages to standard out
- */
-void kvstore_receive(struct message m){
-    if(m.text[0] == 'r'){
-        multicast_receive(m.pid, "Read(" +  m.text.substr(1,1) + ")");
-        //Read from keystore
-        if(dict.find(m.text[1]) == dict.end()){
-            //Handle non-existent case
-            if(!is_causally_ordered){
-                if(m.pid == process_id){
-                    ofs << 425 << ',' << process_id << ',' << "get" << ',' << m.text[1] << ',' << counter << ',' << "resp" << ',' << 0 << std::endl;
-                }
-            }
-            else {
-                eventual_reply(m);
-            }
-        }
-        else {
-            struct valtime result = dict[m.text[1]];
-            // Ack
-            if(!is_causally_ordered){
-                if(m.pid == process_id){
-                    ofs << 425 << ',' << process_id << ',' << "get" << ',' << m.text[1] << ',' << counter << ',' << "resp" << ',' << result.value << std::endl;
-                }
-            }
-            else {
-                eventual_reply(m);
-            }
-        }
-    }
-    else if (m.text[0] == 'w'){
-        multicast_receive(m.pid, "Write(" +  m.text.substr(1,1) + ", " + std::to_string(m.value) + ")");
-        bool write = false;
-        if(!is_causally_ordered){
-            write = true;
-        }
-        else if(dict.find(m.text[1]) == dict.end()){
-            write = true;
-        }
-        else {
-            write = dict[m.text[1]].time < m.time;
-        }
-        if(write){
-            dict[m.text[1]].value = m.value;
-            if(is_causally_ordered)
-                dict[m.text[1]].time = m.time;
-            // Ack
-            if(m.pid == process_id){
-                if(!is_causally_ordered)
-                    ofs << 425 << ',' << process_id << ',' << "put" << ',' << m.text[1] << ',' << counter << ',' << "resp" <<  ',' << dict[m.text[1]].value << std::endl;
-                else
-                    ofs << 425 << ',' << process_id << ',' << "put" << ',' << m.text[1] << ',' << get_ms() << ',' << "resp" <<  ',' << dict[m.text[1]].value << std::endl;
-            }
-        }
-    }
-    else if (m.text[0] == 'R'){
-        if(reply_dict.find(m.id) != reply_dict.end()){
-            reply_dict[m.id].num += 1;
-            if(m.time > reply_dict[m.id].time){
-                reply_dict[m.id].time = m.time;
-                reply_dict[m.id].value = m.value;
-                std::cout << "Updated reply : {" << reply_dict[m.id].num << "," << reply_dict[m.id].value << "," << reply_dict[m.id].time << "}" << std::endl;
-            }
-            if(reply_dict[m.id].num == R){
-                ofs << 425 << ',' << process_id << ',' << "get" << ',' << m.text[1] << ',' << get_ms() << ',' << "resp" <<  ',' << reply_dict[m.id].value << std::endl;
-                reply_dict.erase(m.id);
-            }
-        }
-    }
-}
-
-/**
  * Processes any updated file descriptors
  */
 void process_fds(){
@@ -682,7 +468,7 @@ void process_fds(){
 
                     m.text = std::string(read_bytes+sizeof(int));
                     if(kvstore){
-                        kvstore_delivered(m, read_bytes, sizeof(int));
+                        // kvstore_delivered(m, read_bytes, sizeof(int));
                     }
                     else{
                         delivered(m.pid, m.text);
@@ -699,8 +485,8 @@ void process_fds(){
                     char* read_bytes = new char[read_len];
                     read_all_from_socket(fd, read_bytes, read_len);
                     m.text = std::string(read_bytes);
-                    kvstore_delivered(m, read_bytes, 0);
-                    kvstore_receive(m);
+                    // kvstore_delivered(m, read_bytes, 0);
+                    // kvstore_receive(m);
                 }
                 else {
                     char buf[read_len];
@@ -753,7 +539,7 @@ void check_queue(){
                 delete[] m.V;
 
                 if(kvstore){
-                    kvstore_receive(m);
+                    // kvstore_receive(m);
                 }
                 else {
                     multicast_receive(m.pid, m.text);
@@ -774,7 +560,7 @@ void check_queue(){
                 int decision = result->second;
                 if(counter == decision){
                     if(kvstore){
-                        kvstore_receive(m);
+                        // kvstore_receive(m);
                     }
                     else {
                         multicast_receive(m.pid, m.text);
@@ -823,13 +609,13 @@ void process_input(){
     }
     else if(command.compare("get") == 0){
         keyname = line.substr(space1_idx + 1, std::string::npos);
-        kvstore_get(keyname);
+        // kvstore_get(keyname);
     }
     else if(command.compare("put") == 0){
         keyname = line.substr(space1_idx+1, space2_idx-space1_idx-1);
         value_string = line.substr(space2_idx + 1, std::string::npos);
         sscanf(value_string.c_str(), "%d", &value);
-        kvstore_put(keyname, value);
+        // kvstore_put(keyname, value);
     }
     else if(command.compare("delay") == 0){
         value_string = line.substr(space1_idx + 1, std::string::npos);
@@ -838,6 +624,37 @@ void process_input(){
     }
     else if(command.compare("dump") == 0){
         dump();
+    }
+    else if(command.compare("join") == 0){
+        value_string = line.substr(space1_idx+1,  std::string::npos);
+        sscanf(value_string.c_str(), "%d", &value);
+        // TODO: create chord_join function
+        // chord_join(value);
+    }
+    else if(command.compare("find") == 0){
+        value_string = line.substr(space1_idx+1, space2_idx-space1_idx-1);
+        sscanf(value_string.c_str(), "%d", &value);
+        keyname = line.substr(space2_idx + 1, std::string::npos);
+        // TODO: create chord_find function
+        // chord_find(value, keyname);
+    }
+    else if(command.compare("crash") == 0){
+        value_string = line.substr(space1_idx+1,  std::string::npos);
+        sscanf(value_string.c_str(), "%d", &value);
+        // TODO: create chord_crash function
+        // chord_crash(value);
+    }
+    else if(command.compare("show") == 0){
+        value_string = line.substr(space1_idx+1,  std::string::npos);
+        if(value_string.compare("all") == 0){
+            // TODO: create chord_show_all function
+            // chord_show_all();
+        }
+        else {
+            sscanf(value_string.c_str(), "%d", &value);
+            // TODO: create chord_show function
+            // chord_show(value);
+        }
     }
     else {
         std::cout << "Error: invalid command!" << std::endl;
