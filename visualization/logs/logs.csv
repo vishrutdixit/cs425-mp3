@@ -1,0 +1,17 @@
+Client,Request,Key,Timestamp,Action,Value
+1,put,a,8315,req,1
+1,put,a,8316,resp,1
+2,put,a,8318,req,2
+2,put,a,8319,resp,2
+3,put,a,8704,req,3
+3,put,a,8705,resp,3
+4,put,a,11898,req,4
+4,put,a,11899,resp,4
+2,get,a,19451,req
+3,get,a,20634,req
+4,get,a,20848,req
+2,get,a,24772,resp,4
+3,get,a,27173,resp,4
+4,get,a,27327,resp,4
+1,get,a,28498,req
+1,get,a,38086,resp,4
