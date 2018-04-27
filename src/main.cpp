@@ -17,7 +17,7 @@
 #include "common.h"
 #include "color.h"
 
-#define successor finger[0]
+#define successor finger[0].node
 
 using namespace std;
 
@@ -643,30 +643,30 @@ void setup_connections(){
 }
 
 // Chord node specific information
-int n;
-int finger [6];
+int n; // Chord node identifier
+
+struct finger_info {
+    int start;
+    int node;
+};
+
+static int num_fingers = 8; // Number of fingers in table
+static int num_ident = 1 << num_fingers; // Number of unique identifiers (keys,nodes)
+
+struct finger_info finger[8];
+
 int predecessor;
 static int client_id = 0;
-
-/**
- *  Initializes finger table for new node n
- */
-void init_finger_table(){
-    //TODO: Chord paper (page 6)
-
-}
-
-void update_others(){
-    //TODO:
-}
 
 /**
  *  Ask node n to find id's successor
  */
  int find_successor(int id){
      //TODO:
-     //1. n' = find_precessor(id)
+     //1. n' = find_predecessor(id)
      //2. return n'.successor;
+
+     return 0;
  }
 
  /**
@@ -678,14 +678,17 @@ void update_others(){
      //2. while(n' < id < n'.succesor):
      //3.    n' = n.closest_preceding_finger(id)
      //4. return n'
-     int pred = n;
-     while(!(pred < id < successor)){
-         //send message to ask node pred to find its closest preceding finger
-         char* message = create_message((char*)NULL,0,'p');
-         delayed_usend(message, 1, pred);
-         //pred = response from process pred
-     }
-     return pred;
+
+     // int pred = n;
+     // while(!(pred < id < successor)){
+     //     //send message to ask node pred to find its closest preceding finger
+     //     char* message = create_message((char*)NULL,0,'p');
+     //     delayed_usend(message, 1, pred);
+     //     //pred = response from process pred
+     // }
+     // return pred;
+
+     return 0;
  }
 
  /**
@@ -695,12 +698,96 @@ int closest_preceding_finger(int id){
     //TODO:
     //1. Check finger[i] for i = 7 to 0
     //2. If n < finger[i] < id, return finger[i]
-    for(int i = 7; i >= 0; i--){
-        if(n < finger[i] < id){
-            return finger[i];
+
+    // for(int i = 7; i >= 0; i--){
+    //     if(n < finger[i] < id){
+    //         return finger[i];
+    //     }
+    // }
+    // return n;
+
+    return 0;
+}
+
+int in_interval(bot_idx, top_idx, idx){
+    if(top_idx <= bot_idx){
+        bot_idx += num_ident;
+    }
+    if(top_idx <= idx){
+        idx += num_ident;
+    }
+    return (idx >= bot_idx && idx <= top_idx);
+}
+
+/**
+ * Update all nodes whose finger tables should refer to node n
+ */
+void update_finger_table(int s, int i){
+    // Subtract 1 for exclusive top
+    if(in_interval(n, finger[i].node - 1, s)){
+        finger[i].node = s;
+        p = predecessor();
+        //TODO: refactor to send_update_finger_table(p, s, i);
+        p.update_finger_table(s,i);
+    }
+}
+
+/**
+ * Update all nodes whose finger tables should refer to node n
+ */
+void update_others(){
+    for(int i = 0; i < num_fingers; i++){
+        p = find_predecessor(n - (1 << i))
+        //TODO: refactor to send_update_finger_table(p, n, i);
+        p.update_finger_table(n, i);
+    }
+}
+
+/**
+ * Initializes finger table for local node n
+ * @param n_prime - an arbitrary node in the network
+ */
+void init_finger_table(const int n_prime){
+    //TODO: refactor to get_find_successor(n_prime, finger[0].start);
+    finger[0].node = n_prime.find_successor(finger[0].start);
+    //TODO: refactor to get_predecessor(successor);
+    predecessor = successor.predecessor;
+    //TODO: refactor to update_predecessor(successor, n);
+    successor.predecessor = n;
+    for(int i = 0; i < num_fingers-1; i++){
+        // Subtract 1 for exclusive top
+        if(in_interval(n, finger[i].node, finger[i+1].start - 1)){
+            finger[i+1].node = finger[i].node;
+        }
+        else {
+            //TODO: refactor to get_find_successor(n_prime, finger[i+1].start);
+            finger[i+1].node = n_prime.find_successor(finger[i+1].start);
         }
     }
-    return n;
+}
+
+/**
+ * Joins a new node to the Chord network
+ * @param n_prime - an arbitrary node in the network
+ */
+void join(const int n_prime){
+    // Just checks if n_prime is valid
+    if(n_prime >= 0 && n_prime <= 31){
+        for(int i = 0; i < num_fingers; i++){
+            // Set starts to (n + 2^i) mod 2^8
+            finger[i].start = (n + 1 << i) % num_ident;
+        }
+        init_finger_table(n_prime);
+        update_others();
+    }
+    else {
+        predecessor = n;
+        for(int i = 0; i < num_fingers; i++){
+            finger[i].start = 1 << i;
+            finger[i].node = n;
+            std::cout << finger[i].start << ", " << finger[i].node << std::endl;
+        }
+    }
 }
 
 /**
@@ -743,6 +830,8 @@ int main(int argc, char **argv) {
     parse_config();
     if(client){
         setup_connections();
+        n = process_id;
+        join(-1);
     }
     decisions = new std::unordered_map<int, int>[processes.size()];
 
