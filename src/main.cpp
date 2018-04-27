@@ -17,6 +17,8 @@
 #include "common.h"
 #include "color.h"
 
+#define successor finger[0]
+
 using namespace std;
 
 struct connection {   // Declare connection struct type
@@ -67,6 +69,58 @@ static bool client = false;
 
 __int64_t ms_start = std::chrono::duration_cast< std::chrono::milliseconds >(std::chrono::system_clock::now().time_since_epoch()).count();
 
+// Chord node specific information
+int n;
+int finger [6];
+int predecessor;
+static int client_id = 0;
+
+/**
+ *  Initializes finger table for new node n
+ */
+void init_finger_table(){
+    //TODO: Chord paper (page 6)
+}
+
+/**
+ *  Ask node n to find id's successor
+ */
+ int find_successor(int id){
+     //TODO:
+     //1. n' = find_precessor(id)
+     //2. return n'.successor;
+ }
+
+ /**
+  *  Ask node n to find id's predecessor
+  */
+ int find_predecessor(int id){
+     //TODO:
+     //1. n' = n
+     //2. while(n' < id < n'.succesor):
+     //3.    n' = n.closest_preceding_finger(id)
+     //4. return n'
+     int pred = n;
+     while((!pred < id < successor)){
+         pred = //pred.closest_preceding_finger(id)
+     }
+     return pred;
+ }
+
+ /**
+  *  Return closest finger preceding id
+  */
+int closest_preceding_finger(int id){
+    //TODO:
+    //1. Check finger[i] for i = 7 to 0
+    //2. If n < finger[i] < id, return finger[i]
+    for(int i = 7, i >= 0, i--){
+        if(n < finger[i] < id){
+            return finger[i];
+        }
+    }
+    return n;
+}
 
 /**
  * Initializes the unordered_map holding the information needed to connect to each process.
