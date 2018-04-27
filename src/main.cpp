@@ -294,6 +294,15 @@ void unicast_receive(int source, std::string message){
 }
 
 /**
+ * Recieved a chord message and processes it based on protocol
+ */
+void chord_receive(int source, std::string message){
+    if(message.compare("p") == 0){
+        std::cout << "got predecessor request from process " << source << std::endl;
+    }
+}
+
+/**
  * Unicast sends a message to the group
  */
 void unicast_send(int dest, const char* message, int len){
@@ -456,6 +465,7 @@ void process_fds(){
                 char buf[read_len];
                 read_all_from_socket(fd, buf, read_len);
                 unicast_receive(fd_info[fd].pid, std::string(buf));
+                chord_receive(fd_info[fd].pid, std::string(buf));
             }
             else {
                 int pid, id, decision;
@@ -530,73 +540,6 @@ void check_queue(){
 }
 
 /**
- * Checks if there is user input to process and handles it if so
- */
-void process_input(){
-    std::string command, dest_string, message, keyname, value_string;
-    int value; // Used for scanning integers into (e.g. unicast-send destination, kvstore-get value)
-
-    std::string line;
-    std::getline( std::cin, line );
-    if(line.empty()){
-        std::cin.clear();
-        return;
-    }
-
-    int space1_idx = line.find(' ', 0);
-    if(space1_idx == std::string::npos){ return; } // incorrect command format - must have at least one space
-    int space2_idx = line.find(' ', space1_idx+1);
-    command = line.substr(0, space1_idx);
-    if(command.compare("msend") == 0){
-        // Must be a multicast send
-        message = line.substr(space1_idx + 1, std::string::npos);
-        multicast_send(message.c_str(), message.size());
-    }
-    else if(command.compare("send") == 0){
-        //Assume it's a unicast send
-        dest_string = line.substr(space1_idx+1, space2_idx-space1_idx-1);
-        message = line.substr(space2_idx + 1, std::string::npos);
-        sscanf(dest_string.c_str(), "%d", &value);
-        unicast_send(value, message.c_str(), message.size());
-    }
-    else if(command.compare("join") == 0){
-        value_string = line.substr(space1_idx+1,  std::string::npos);
-        sscanf(value_string.c_str(), "%d", &value);
-        // TODO: create chord_join function
-        // chord_join(value);
-    }
-    else if(command.compare("find") == 0){
-        value_string = line.substr(space1_idx+1, space2_idx-space1_idx-1);
-        sscanf(value_string.c_str(), "%d", &value);
-        keyname = line.substr(space2_idx + 1, std::string::npos);
-        // TODO: create chord_find function
-        // chord_find(value, keyname);
-    }
-    else if(command.compare("crash") == 0){
-        value_string = line.substr(space1_idx+1,  std::string::npos);
-        sscanf(value_string.c_str(), "%d", &value);
-        // TODO: create chord_crash function
-        // chord_crash(value);
-    }
-    else if(command.compare("show") == 0){
-        value_string = line.substr(space1_idx+1,  std::string::npos);
-        if(value_string.compare("all") == 0){
-            // TODO: create chord_show_all function
-            // chord_show_all();
-        }
-        else {
-            sscanf(value_string.c_str(), "%d", &value);
-            // TODO: create chord_show function
-            // chord_show(value);
-        }
-    }
-    else {
-        std::cout << "Error: invalid command!" << std::endl;
-    }
-
-}
-
-/**
  * Frees memory and closes all file descriptors still in use
  */
 void close_process(int sig){
@@ -643,8 +586,8 @@ void setup_connections(){
 }
 
 // Chord node specific information
-int n;
-int finger [6];
+int n; //chord self-identifier
+int finger [8];
 int predecessor;
 static int client_id = 0;
 
@@ -661,46 +604,171 @@ void update_others(){
 }
 
 /**
+ * Check if an index is in an circular open/closed interval [(a,b)]
+ */
+int in_interval(int a, int b, int idx, int a_closed, int b_closed){
+    if (a == b) return true;
+    if(a_closed && b_closed){
+        if(a > b){
+            return !(b < idx < a);
+        }
+        else{
+            return (a <= idx <= b);
+        }
+    }
+    else if(!a_closed && b_closed){
+        if(a > b){
+            return !(b < idx <= a);
+        }
+        return (a < idx <= b);
+    }
+    else if(a_closed && !b_closed){
+        if(a > b){
+            return !(b <= idx < a);
+        }
+        return (a <= idx < b);
+    }
+    else if(!a_closed && !b_closed){
+        if(a > b){
+            return !(b <= idx <= a);
+        }
+        return (a < idx < b);
+    }
+    else {
+        return false;
+    }
+}
+
+/**
+ *  Return closest finger preceding id
+ */
+bool closest_preceding_finger(int id){
+   //TODO:
+   //1. Check finger[i] for i = 7 to 0
+   //2. If n < finger[i] < id, return finger[i]
+   for(int i = 7; i >= 0; i--){
+       if(n < finger[i] < id){
+           return finger[i];
+       }
+   }
+   return n;
+}
+
+/**
+ *  Ask node n to find id's predecessor
+ */
+int find_predecessor(int id){
+    //TODO:
+    //1. n' = n
+    //2. while(n' < id < n'.succesor):
+    //3.    n' = n'.closest_preceding_finger(id)
+    //4. return n'
+    int pred = n;
+
+    //check in interval (n',n'.successor]
+    while(!(in_interval(pred,successor,id,0,1))){
+        if(pred == n){
+            pred = closest_preceding_finger(id);
+            //std::cout << "closest preceding finger is: " << pred << std::endl;
+        }
+        else{
+            //send message to ask node pred to find its closest preceding finger
+            char* pred_req = create_message((char*)NULL,0,'p');
+            delayed_usend(pred_req, 1, pred);
+            //pred = response from process pred
+
+        }
+    }
+    std::cout << "returning predecessor as: " << pred << std::endl;
+    return pred;
+}
+
+/**
  *  Ask node n to find id's successor
  */
  int find_successor(int id){
      //TODO:
-     //1. n' = find_precessor(id)
+     //1. n' = find_predecessor(id)
      //2. return n'.successor;
- }
-
- /**
-  *  Ask node n to find id's predecessor
-  */
- int find_predecessor(int id){
-     //TODO:
-     //1. n' = n
-     //2. while(n' < id < n'.succesor):
-     //3.    n' = n.closest_preceding_finger(id)
-     //4. return n'
-     int pred = n;
-     while(!(pred < id < successor)){
-         //send message to ask node pred to find its closest preceding finger
-         char* message = create_message((char*)NULL,0,'p');
-         delayed_usend(message, 1, pred);
-         //pred = response from process pred
+     pred = find_predecessor(id)
+     if(pred == n){
+         return succesor;
      }
-     return pred;
+     else{
+         //send message to find node pred's successor
+         char* suc_req = create_message((char*)NULL,0,'s')
+         delayed_usend(suc_req,1,pred);
+         //wait for response and return
+     }
  }
 
- /**
-  *  Return closest finger preceding id
-  */
-int closest_preceding_finger(int id){
-    //TODO:
-    //1. Check finger[i] for i = 7 to 0
-    //2. If n < finger[i] < id, return finger[i]
-    for(int i = 7; i >= 0; i--){
-        if(n < finger[i] < id){
-            return finger[i];
+/**
+ * Checks if there is user input to process and handles it if so
+ */
+void process_input(){
+    std::string command, dest_string, message, keyname, value_string;
+    int value; // Used for scanning integers into (e.g. unicast-send destination, kvstore-get value)
+
+    std::string line;
+    std::getline( std::cin, line );
+    if(line.empty()){
+        std::cin.clear();
+        return;
+    }
+
+    int space1_idx = line.find(' ', 0);
+    if(space1_idx == std::string::npos){ return; } // incorrect command format - must have at least one space
+    int space2_idx = line.find(' ', space1_idx+1);
+    command = line.substr(0, space1_idx);
+    if(command.compare("msend") == 0){
+        // Must be a multicast send
+        message = line.substr(space1_idx + 1, std::string::npos);
+        multicast_send(message.c_str(), message.size());
+    }
+    else if(command.compare("send") == 0){
+        //Assume it's a unicast send
+        dest_string = line.substr(space1_idx+1, space2_idx-space1_idx-1);
+        message = line.substr(space2_idx + 1, std::string::npos);
+        sscanf(dest_string.c_str(), "%d", &value);
+        unicast_send(value, message.c_str(), message.size());
+    }
+    else if(command.compare("join") == 0){
+        value_string = line.substr(space1_idx+1,  std::string::npos);
+        sscanf(value_string.c_str(), "%d", &value);
+        // TODO: create chord_join function
+        // chord_join(value);
+        find_predecessor(value);
+
+    }
+    else if(command.compare("find") == 0){
+        value_string = line.substr(space1_idx+1, space2_idx-space1_idx-1);
+        sscanf(value_string.c_str(), "%d", &value);
+        keyname = line.substr(space2_idx + 1, std::string::npos);
+        // TODO: create chord_find function
+        // chord_find(value, keyname);
+    }
+    else if(command.compare("crash") == 0){
+        value_string = line.substr(space1_idx+1,  std::string::npos);
+        sscanf(value_string.c_str(), "%d", &value);
+        // TODO: create chord_crash function
+        // chord_crash(value);
+    }
+    else if(command.compare("show") == 0){
+        value_string = line.substr(space1_idx+1,  std::string::npos);
+        if(value_string.compare("all") == 0){
+            // TODO: create chord_show_all function
+            // chord_show_all();
+        }
+        else {
+            sscanf(value_string.c_str(), "%d", &value);
+            // TODO: create chord_show function
+            // chord_show(value);
         }
     }
-    return n;
+    else {
+        std::cout << "Error: invalid command!" << std::endl;
+    }
+
 }
 
 /**
@@ -715,6 +783,11 @@ int main(int argc, char **argv) {
         }
         else if(protocol.compare("client") == 0){
             client = true;
+            //initialize node ft information
+            n = 0;
+            for(int i = 0; i < 8; i++){
+                finger[i] = 0;
+            }
         }
         else {
             is_causally_ordered = false;
