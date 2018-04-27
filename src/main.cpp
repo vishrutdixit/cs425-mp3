@@ -55,7 +55,7 @@ static int kq;
 static int event_idx = 0;
 static struct kevent* chlist;
 static struct kevent* evlist;
-static const struct timespec tmout = { 0, 100000000 };  /* return after 100ms */
+static const struct timespec tmout = { 0, 0 };  /* return after 100ms */
 static int max_delay, min_delay = 0;
 static bool is_causally_ordered = false;
 
@@ -63,20 +63,8 @@ static int counter = 0;
 static int message_counter = 0;
 static bool sequencer = false;
 
-static bool kvstore = false;
-std::ofstream ofs;
-int W, R;
-struct valtime {
-    int value;
-    __int64_t time;
-};
-std::unordered_map<char, struct valtime> dict;
-struct reply {
-    int num;
-    int value;
-    __int64_t time;
-};
-std::unordered_map<int, struct reply> reply_dict;
+static bool client = false;
+
 __int64_t ms_start = std::chrono::duration_cast< std::chrono::milliseconds >(std::chrono::system_clock::now().time_since_epoch()).count();
 
 
@@ -209,9 +197,9 @@ void delayed_msend(const char* cstr_message, int len, int fd)
     if(is_causally_ordered){
         // Write the vector timestamp
         char* output = new char[len + sizeof(int)*processes.size()];
-        for(int i = 1; i <= processes.size(); i++){
+        for(int i = 0; i < processes.size(); i++){
             int timestamp = processes[i].timestamp;
-            memcpy(output+(i-1)*sizeof(int), &timestamp, sizeof(int));
+            memcpy(output+(i)*sizeof(int), &timestamp, sizeof(int));
         }
         // Write the message
         memcpy(output + processes.size()*sizeof(int), cstr_message, len);
@@ -243,17 +231,6 @@ void delayed_msend(const char* cstr_message, int len, int fd)
 
 void delay(int delay){
     std::this_thread::sleep_for(std::chrono::milliseconds(delay));
-}
-
-/**
- * Prints the contents of the key-value store to standard out
- */
-void dump(){
-    for(auto kv : dict){
-        char key = kv.first;
-        struct valtime vt = kv.second;
-        std::cout << KCYN << "{" << key << ", " << vt.value << "}" << RST << std::endl;
-    }
 }
 
 /**
@@ -442,8 +419,9 @@ void process_fds(){
                     struct message m;
                     m.pid = fd_info[fd].pid;
                     m.V = new int[processes.size()];
-                    char* read_bytes = new char[read_len];
+                    char* read_bytes = new char[read_len+1];
                     read_all_from_socket(fd, read_bytes, read_len);
+                    read_bytes[read_len] = 0;
                     int timestamp;
 
                     for(int i = 0; i < processes.size(); i ++){
@@ -467,32 +445,16 @@ void process_fds(){
                     m.id = id;
 
                     m.text = std::string(read_bytes+sizeof(int));
-                    if(kvstore){
-                        // kvstore_delivered(m, read_bytes, sizeof(int));
-                    }
-                    else{
-                        delivered(m.pid, m.text);
-                    }
+                    delivered(m.pid, m.text);
                     if(sequencer) sequencer_send(m.id, m.pid);
                     else hold_back_queue.push(m);
                 }
             }
             else if(protocol == 'u'){
                 // Read the message
-                if(kvstore){
-                    struct message m;
-                    m.pid = fd_info[fd].pid;
-                    char* read_bytes = new char[read_len];
-                    read_all_from_socket(fd, read_bytes, read_len);
-                    m.text = std::string(read_bytes);
-                    // kvstore_delivered(m, read_bytes, 0);
-                    // kvstore_receive(m);
-                }
-                else {
-                    char buf[read_len];
-                    read_all_from_socket(fd, buf, read_len);
-                    unicast_receive(fd_info[fd].pid, std::string(buf));
-                }
+                char buf[read_len];
+                read_all_from_socket(fd, buf, read_len);
+                unicast_receive(fd_info[fd].pid, std::string(buf));
             }
             else {
                 int pid, id, decision;
@@ -522,7 +484,7 @@ void check_queue(){
             bool failed = false;
             for(int i = 0 ; i < processes.size(); i ++){
                 int timestamp = m.V[i];
-                int pid = i+1;
+                int pid = i;
                 if(m.pid == process_id) break;
                 if(pid == m.pid && timestamp != (processes[pid].timestamp + 1) ){
                     // Guarantees V_q[i] == V_p[i] + 1
@@ -537,13 +499,7 @@ void check_queue(){
             }
             if(!failed){
                 delete[] m.V;
-
-                if(kvstore){
-                    // kvstore_receive(m);
-                }
-                else {
-                    multicast_receive(m.pid, m.text);
-                }
+                multicast_receive(m.pid, m.text);
             }
             else {
                 hold_back_queue.push(m);
@@ -559,12 +515,7 @@ void check_queue(){
             else {
                 int decision = result->second;
                 if(counter == decision){
-                    if(kvstore){
-                        // kvstore_receive(m);
-                    }
-                    else {
-                        multicast_receive(m.pid, m.text);
-                    }
+                    multicast_receive(m.pid, m.text);
                     decisions[m.pid-1].erase(m.id);
                 }
                 else {
@@ -606,24 +557,6 @@ void process_input(){
         message = line.substr(space2_idx + 1, std::string::npos);
         sscanf(dest_string.c_str(), "%d", &value);
         unicast_send(value, message.c_str(), message.size());
-    }
-    else if(command.compare("get") == 0){
-        keyname = line.substr(space1_idx + 1, std::string::npos);
-        // kvstore_get(keyname);
-    }
-    else if(command.compare("put") == 0){
-        keyname = line.substr(space1_idx+1, space2_idx-space1_idx-1);
-        value_string = line.substr(space2_idx + 1, std::string::npos);
-        sscanf(value_string.c_str(), "%d", &value);
-        // kvstore_put(keyname, value);
-    }
-    else if(command.compare("delay") == 0){
-        value_string = line.substr(space1_idx + 1, std::string::npos);
-        sscanf(value_string.c_str(), "%d", &value);
-        delay(value);
-    }
-    else if(command.compare("dump") == 0){
-        dump();
     }
     else if(command.compare("join") == 0){
         value_string = line.substr(space1_idx+1,  std::string::npos);
@@ -690,27 +623,36 @@ void close_process(int sig){
     end_session = true;
 }
 
+void setup_connections(){
+    for(int i = 1; i < processes.size(); i++){
+        pid_t child = fork();
+        if(child == -1){ // err
+            break;
+        }
+        char pid_str[3];
+        sprintf(pid_str, "%d", i);
+        if(child == 0){ // I am the child
+            close(0); // Close stdin
+            close(1); // Close stdout
+            execlp("./bin/runner.exe", "./bin/runner.exe", pid_str, NULL);
+        }
+        else { //I am the parent
+        }
+    }
+}
+
 /**
  *  Runs the program
  */
 int main(int argc, char **argv) {
-    std::string filename = "log"+std::string(argv[1])+".txt";
-    ofs = std::ofstream(filename.c_str(), std::ofstream::trunc);
     if(argc >= 3){
         std::cout << "Starting process with id " << argv[1] << " using " << argv[2] << " ordering." << std::endl;
         std::string protocol = argv[2];
         if(protocol.compare("causal") == 0){
             is_causally_ordered = true;
         }
-        else if(protocol.compare("linearizable") == 0){
-            kvstore = true;
-            is_causally_ordered = false;
-        }
-        else if(protocol.compare("eventual") == 0){
-            kvstore = true;
-            is_causally_ordered = true;
-            sscanf(argv[3], "%d", &R);
-            sscanf(argv[4], "%d", &W);
+        else if(protocol.compare("client") == 0){
+            client = true;
         }
         else {
             is_causally_ordered = false;
@@ -737,6 +679,9 @@ int main(int argc, char **argv) {
     }
 
     parse_config();
+    if(client){
+        setup_connections();
+    }
     decisions = new std::unordered_map<int, int>[processes.size()];
 
     chlist = new struct kevent[2*processes.size()]; // 2 fds per process
@@ -774,7 +719,7 @@ int main(int argc, char **argv) {
         }
         process_fds();
         if(!sequencer){
-            process_input();
+            if(client) process_input();
             if(!hold_back_queue.empty()){
                 check_queue();
             }
