@@ -927,11 +927,11 @@ int closest_preceding_finger(int id){
    //2. If n < finger[i] < id, return finger[i]
    for(int i = 7; i >= 0; i--){
        if(in_interval(n,id,finger[i].node,0,0)){
-           std::cout << "Returning " << finger[i].node << std::endl;
+           //std::cout << "Returning " << finger[i].node << std::endl;
            return finger[i].node;
        }
    }
-   std::cout << "Returning " << n << std::endl;
+   //std::cout << "Returning " << n << std::endl;
    return n;
 }
 
@@ -953,9 +953,9 @@ int find_predecessor(int id){
 
     //check in interval (n',n'.successor]
     while(!(in_interval(pred,get_successor(pred),id,0,1))){
-        std::cout << "Pred is initially " << pred << std::endl;
+        //std::cout << "Pred is initially " << pred << std::endl;
         pred = get_closest_preceding_finger(pred, id);
-        std::cout << "Pred is now " << pred << std::endl;
+        //std::cout << "Pred is now " << pred << std::endl;
     }
 
 
@@ -1025,7 +1025,7 @@ void init_finger_table(const int n_prime){
             finger[i+1].node = get_find_successor(n_prime, finger[i+1].start);
         }
     }
-    show(); //debugging
+    //show(); //debugging
 }
 
 void show(){
@@ -1045,7 +1045,17 @@ void show(){
     std::cout << predecessor+1;
     std::cout << ", ";
     std::cout << n;
-    std::cout << "]" << std::endl;
+    << "]" << std::endl;
+}
+
+/**
+ * Send a show request to all processes
+ */
+void show_all() {
+    for(auto x: processes){
+        unsigned int pid = x.first;
+        send_show(pid);
+    }
 }
 
 /**
@@ -1126,6 +1136,7 @@ void process_input(){
         if(value_string.compare("all") == 0){
             // TODO: create chord_show_all function
             // chord_show_all();
+            show_all();
         }
         else {
             sscanf(value_string.c_str(), "%d", &value);
