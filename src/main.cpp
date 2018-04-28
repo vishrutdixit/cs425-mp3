@@ -105,7 +105,9 @@ void update_finger_table(int s, int i);
 void update_others();
 void init_finger_table(const int n_prime);
 void join(const int n_prime);
+void soft_crash();
 void show();
+int get_message_counter(const int dest);
 
 /**
  * Initializes the unordered_map holding the information needed to connect to each process.
@@ -177,6 +179,14 @@ void remove_fd_from_kqueue(int fd){
     }
     // else event we want to remove is at end
     // -> do nothing, we already decremented the event_idx to exclude it from kevent call
+}
+
+/**
+ * Uses kqueue flags to detect if a socket has closed
+ */
+bool check_fd_disconnected(int fd){
+    int idx = fd_info[fd].event_idx;
+    return (chlist[idx].flags & EV_EOF);
 }
 
 /**
@@ -328,7 +338,7 @@ void delayed_sequencer_msend(int message_id, int fd, int pid){
  * Receives a unicast message
  */
 void unicast_receive(int source, std::string message){
-    std::cout << "Process " << process_id << ": " << KGRN << "Received \"" << message << "\" from process " << source <<  ", system time is " << get_time() << RST << std::endl;
+    // std::cout << "Process " << process_id << ": " << KGRN << "Received \"" << message << "\" from process " << source <<  ", system time is " << get_time() << RST << std::endl;
 }
 
 /**
@@ -336,12 +346,13 @@ void unicast_receive(int source, std::string message){
  */
 void unicast_send(int dest, const char* message, int len){
     std::unordered_map<unsigned int, struct connection>::const_iterator result = processes.find(dest);
+    message_counter+=1;
     if(result == processes.end()){
         std::cout << "Error: could not unicast send to non-existent pid" << std::endl;
         return;
     }
     struct connection info = result->second;
-    std::cout << KRED << "Sent \"" << message << "\" to process " << dest << ", system time is " << get_time() << RST << std::endl;
+    // std::cout << KRED << "Sent \"" << message << "\" to process " << dest << ", system time is " << get_time() << RST << std::endl;
     // Send a message with simulated delay
     std::thread t(delayed_usend, message, len, info.server_fd);
     t.detach();
@@ -394,7 +405,7 @@ void multicast_send(const char * message, int len){
         int dest = x.first;
         struct connection info = x.second;
         if(info.server_fd == -1) continue;
-        std::cout << KRED << "Sent \"" << message << "\" to process " << dest << ", system time is " << get_time() << RST << std::endl;
+        // std::cout << KRED << "Sent \"" << message << "\" to process " << dest << ", system time is " << get_time() << RST << std::endl;
         // Send a message with simulated delay
         std::thread t(delayed_msend, message, len, info.server_fd);
         t.detach();
@@ -420,53 +431,62 @@ void chord_receive(int source, char* message, int len){
     if(message[0] == 'r' || message[0] == 'R') { // Received predecessor reply
         has_reply = true;
         reply = *((int *) (message + 1));
-        std::cout << "Got reply: " << reply << " from process " << source << std::endl;
+        // std::cout << "Got reply: " << reply << " from process " << source << std::endl;
     }
     else { // Received predecessor request
         if(message[0] == 'p'){
-            std::cout << "Got predecessor request from process " << source << std::endl;
+            // std::cout << "Got predecessor request from process " << source << std::endl;
             chord_reply(source, predecessor, 'r');
         }
         else if(message[0] == 's'){
-            std::cout << "Got successor request from process " << source << std::endl;
+            // std::cout << "Got successor request from process " << source << std::endl;
             chord_reply(source, successor, 'r');
         }
         else if(message[0] == 'f'){
             int id = *((int *)(message + 1));
-            std::cout << "Got find_successor request for " << id << " from process " << source << std::endl;
+            // std::cout << "Got find_successor request for " << id << " from process " << source << std::endl;
             chord_reply(source, find_successor(id), 'r');
         }
         else if(message[0] == 'F'){
             int id = *((int *)(message + 1));
-            std::cout << "Got find_predecessor request for " << id << " from process " << source << std::endl;
+            // std::cout << "Got find_predecessor request for " << id << " from process " << source << std::endl;
             chord_reply(source, find_predecessor(id), 'r');
         }
         else if(message[0] == 'P'){
             int val = *((int *)(message + 1));
-            std::cout << "Got set_predecessor request with " << val << " from process " << source << std::endl;
+            // std::cout << "Got set_predecessor request with " << val << " from process " << source << std::endl;
             chord_reply(source, set_predecessor(val), 'r');
         }
         else if(message[0] == 'c'){
             int id = *((int *)(message + 1));
-            std::cout << "Got get_closest_preceding_finger request with " << id << " from process " << source << std::endl;
+            // std::cout << "Got get_closest_preceding_finger request with " << id << " from process " << source << std::endl;
             chord_reply(source, closest_preceding_finger(id), 'r');
         }
         else if(message[0] == 'U'){
             int s = *((int *)(message + 1));
             int i = *((int *)(message + 1 + sizeof(int)));
-            std::cout << "Got set_update_finger_table request with " << s << ", " << i << " from process " << source << std::endl;
+            // std::cout << "Got set_update_finger_table request with " << s << ", " << i << " from process " << source << std::endl;
             update_finger_table(s, i);
             chord_reply(source, 1, 'r');
         }
         else if(message[0] == 'j'){
-            std::cout << "Got join request with " << source << " from process " << source << std::endl;
+            // std::cout << "Got join request with " << source << " from process " << source << std::endl;
             join(source);
             chord_reply(source, 1, 'r');
         }
         else if(message[0] == 'h'){
-            std::cout << "Got show request from process " << source << std::endl;
+            // std::cout << "Got show request from process " << source << std::endl;
             show();
             chord_reply(source, 1, 'r');
+        }
+        else if(message[0] == 'o'){
+            // std::cout << "Got crash request from process " << source << std::endl;
+            soft_crash();
+            chord_reply(source, 1, 'r');
+        }
+        else if(message[0] == 'm'){
+            // std::cout << "Got message_counter request from process " << source << std::endl;
+            chord_reply(source, message_counter, 'r');
         }
     }
 }
@@ -711,12 +731,13 @@ void delayed_usend_reply(const char* cstr_message, int len, int fd)
  */
 void unicast_send_reply(int dest, const char* message, int len){
     std::unordered_map<unsigned int, struct connection>::const_iterator result = processes.find(dest);
+    message_counter+=1;
     if(result == processes.end()){
         std::cout << "Error: could not unicast send to non-existent pid" << std::endl;
         return;
     }
     struct connection info = result->second;
-    std::cout << KRED << "Sent \"" << message << "\" to process " << dest << ", system time is " << get_time() << RST << std::endl;
+    // std::cout << KRED << "Sent \"" << message << "\" to process " << dest << ", system time is " << get_time() << RST << std::endl;
     // Send a message with simulated delay
     std::thread t(delayed_usend_reply, message, len, info.server_fd);
     t.join();
@@ -821,6 +842,19 @@ int get_find_predecessor(const int dest, const int id){
 }
 
 /**
+* A "message call" asking for a node's find_predecessor result
+*/
+int get_message_counter(const int dest){
+    if(dest == process_id){
+        return message_counter;
+    }
+    char message[] = "m";
+    int len = 1;
+    unicast_send_reply(dest, message, len);
+    return reply;
+}
+
+/**
 * A "message call" asking a node to set_predecessor
 */
 int set_update_finger_table(const int dest, const int s, const int i){
@@ -864,6 +898,19 @@ void send_show(const int dest){
     char message[] = "h";
     int len = 1;
     unicast_send_reply(dest, message, len);
+}
+
+/**
+* A "message call" asking a node to join
+*/
+int send_crash(const int dest){
+    if(dest == process_id){
+        soft_crash();
+    }
+    char message[] = "?";
+    int len = 1;
+    unicast_send_reply(dest, message, len);
+    return reply;
 }
 
 /**
@@ -921,7 +968,6 @@ int set_predecessor(const int id){
  *  Return closest finger preceding id
  */
 int closest_preceding_finger(int id){
-    show();
    //TODO:
    //1. Check finger[i] for i = 7 to 0
    //2. If n < finger[i] < id, return finger[i]
@@ -977,9 +1023,9 @@ int find_successor(int id){
  * Update all nodes whose finger tables should refer to node n
  */
 void update_finger_table(int s, int i){
+    std::cout << s << std::endl;
     // std::cout << "is " << s << " the " << i << "th finger table index of process " << process_id << "?" << std::endl;
     if(in_interval(n, finger[i].node, s, 0, 0)){
-        //std::cout << "TRUE" << std::endl;
         finger[i].node = s;
         int p = predecessor;
         //TODO: refactor to set_update_finger_table(p, s, i);
@@ -1027,7 +1073,9 @@ void init_finger_table(const int n_prime){
     }
     //show(); //debugging
 }
-
+/*
+ * Show the finger-table of this node
+ */
 void show(){
     if(n == -1) {
         std::cout << "p does not exist" << std::endl;
@@ -1059,6 +1107,30 @@ void show_all() {
 }
 
 /**
+ * Send a show request to all processes
+ */
+void message_counter_all() {
+    int count = 0;
+    for(auto x: processes){
+        unsigned int pid = x.first;
+        int cur_count = get_message_counter(pid);
+        std::cout << pid << " has " << cur_count << " messages" <<std::endl;
+        count += cur_count;
+    }
+    std::cout << "Chord network has " << count << " messages" <<std::endl;
+}
+
+/**
+ * Clean-crashes the node
+ */
+void soft_crash(){
+    n = -1;
+    for(int i = 0; i < num_fingers; i++){
+        finger[i].node = -1;
+    }
+}
+
+/**
  * Joins a new node to the Chord network
  * @param n_prime - an arbitrary node in the network
  */
@@ -1079,6 +1151,18 @@ void join(const int n_prime){
             finger[i].start = 1 << i;
             finger[i].node = n;
         }
+    }
+}
+
+/**
+ * Send a join request to all processes
+ */
+void join_all() {
+    for(auto x: processes){
+        unsigned int pid = x.first;
+        if(pid != 0) send_join(pid);
+        std::cout << "Finished joining " << pid << std::endl;
+        show_all();
     }
 }
 
@@ -1114,9 +1198,15 @@ void process_input(){
     }
     else if(command.compare("join") == 0){
         value_string = line.substr(space1_idx+1,  std::string::npos);
-        sscanf(value_string.c_str(), "%d", &value);
-        // TODO: create chord_join function
-        send_join(value);
+        if(value_string.compare("all") == 0){
+            // TODO: create chord_show_all function
+            join_all();
+        }
+        else {
+            sscanf(value_string.c_str(), "%d", &value);
+            // TODO: create chord_join function
+            send_join(value);
+        }
     }
     else if(command.compare("find") == 0){
         value_string = line.substr(space1_idx+1, space2_idx-space1_idx-1);
@@ -1133,13 +1223,16 @@ void process_input(){
         value_string = line.substr(space1_idx+1,  std::string::npos);
         sscanf(value_string.c_str(), "%d", &value);
         // TODO: create chord_crash function
-        // chord_crash(value);
+        send_crash(value);
+    }
+    else if(command.compare("count") == 0){
+        // TODO: create chord_crash function
+        message_counter_all();
     }
     else if(command.compare("show") == 0){
         value_string = line.substr(space1_idx+1,  std::string::npos);
         if(value_string.compare("all") == 0){
             // TODO: create chord_show_all function
-            // chord_show_all();
             show_all();
         }
         else {
