@@ -1045,7 +1045,7 @@ void show(){
     std::cout << predecessor+1;
     std::cout << ", ";
     std::cout << n;
-    << "]" << std::endl;
+    std::cout << "]" << std::endl;
 }
 
 /**
@@ -1121,9 +1121,13 @@ void process_input(){
     else if(command.compare("find") == 0){
         value_string = line.substr(space1_idx+1, space2_idx-space1_idx-1);
         sscanf(value_string.c_str(), "%d", &value);
-        keyname = line.substr(space2_idx + 1, std::string::npos);
+        int val1 = value;
+        value_string = line.substr(space2_idx + 1, std::string::npos);
+        sscanf(value_string.c_str(), "%d", &value);
+        int val2 = value;
         // TODO: create chord_find function
-        // chord_find(value, keyname);
+        int res = get_find_successor(val1, val2);
+        std::cout << "find " << val1 << " " << val2 << " = " << res << std::endl;
     }
     else if(command.compare("crash") == 0){
         value_string = line.substr(space1_idx+1,  std::string::npos);
