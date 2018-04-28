@@ -1045,7 +1045,7 @@ void show(){
     std::cout << predecessor+1;
     std::cout << ", ";
     std::cout << n;
-    << "]" << std::endl;
+    std::cout << "]" << std::endl;
 }
 
 /**
