@@ -853,11 +853,12 @@ int send_join(const int dest){
 }
 
 /**
-* A "message call" asking a node to join
+* A "message call" asking a node to show
 */
 int send_show(const int dest){
     if(dest == process_id){
         show();
+        return 0;
     }
     char message[] = "h";
     int len = 1;
@@ -869,32 +870,38 @@ int send_show(const int dest){
  * Check if an index is in an circular open/closed interval [(a,b)]
  */
 int in_interval(int a, int b, int idx, int a_closed, int b_closed){
-    std::cout << "check: " << idx << " between " << (a_closed ? "[" : "(") << a << ", " << b << (b_closed ? "]" : ")") << " = ";
+    std::cout << KCYN << "check: " << idx << " between " << (a_closed ? "[" : "(") << a << ", " << b << (b_closed ? "]" : ")") << " = " << RST;
     if (a == b) return true; // TODO: check this condition later
     if(a_closed && b_closed){
         if(a > b){
+            std::cout << (!(b < idx && idx < a) ? "TRUE" : "FALSE") << std::endl;
             return !(b < idx && idx < a);
         }
-        else{
-            return (a <= idx && idx <= b);
-        }
+        std::cout << ((a <= idx && idx <= b) ? "TRUE" : "FALSE") << std::endl;
+        return (a <= idx && idx <= b);
     }
     else if(!a_closed && b_closed){
         if(a > b){
+            std::cout << (!(b < idx && idx <= a) ? "TRUE" : "FALSE") << std::endl;
             return !(b < idx && idx <= a);
         }
+        std::cout << ((a < idx && idx <= b) ? "TRUE" : "FALSE") << std::endl;
         return (a < idx && idx <= b);
     }
     else if(a_closed && !b_closed){
         if(a > b){
+            std::cout << (!(b <= idx && idx < a) ? "TRUE" : "FALSE") << std::endl;
             return !(b <= idx && idx < a);
         }
+        std::cout << ((a <= idx && idx < b) ? "TRUE" : "FALSE") << std::endl;
         return (a <= idx && idx < b);
     }
     else if(!a_closed && !b_closed){
         if(a > b){
+            std::cout << (!(b <= idx && idx <= a) ? "TRUE" : "FALSE") << std::endl;
             return !(b <= idx && idx <= a);
         }
+        std::cout << ((a < idx && idx < b) ? "TRUE" : "FALSE") << std::endl;
         return (a < idx && idx < b);
     }
     else {
@@ -918,7 +925,7 @@ bool closest_preceding_finger(int id){
    //1. Check finger[i] for i = 7 to 0
    //2. If n < finger[i] < id, return finger[i]
    for(int i = 7; i >= 0; i--){
-       if(n < finger[i].node && finger[i].node < id){
+       if(in_interval(n,id,finger[i].node,0,0)){
            return finger[i].node;
        }
    }
@@ -934,12 +941,19 @@ int find_predecessor(int id){
     //2. while(n' < id < n'.successor):
     //3.    n' = n'.closest_preceding_finger(id)
     //4. return n'
+    std::cout << "inside find_predecessor()" << std::endl;
+    std::cout << "process_id = " << process_id << std::endl;
+    std::cout << "n = " << n << std::endl;
+    std::cout << "id = " << id << std::endl;
+
     int pred = n;
 
     //check in interval (n',n'.successor]
     while(!(in_interval(pred,get_successor(pred),id,0,1))){
         pred = get_closest_preceding_finger(pred, id);
     }
+
+
     return pred;
 }
 
@@ -958,15 +972,13 @@ int find_successor(int id){
  * Update all nodes whose finger tables should refer to node n
  */
 void update_finger_table(int s, int i){
-    if(in_interval(n, finger[i].node, s, 1, 0)){
-        std::cout << "TRUE" << std::endl;
+    std::cout << "is " << s << " the " << i << "th finger table index of process " << process_id << "?" << std::endl;
+    if(in_interval(n, finger[i].node, s, 0, 0)){
+        //std::cout << "TRUE" << std::endl;
         finger[i].node = s;
         int p = predecessor;
         //TODO: refactor to set_update_finger_table(p, s, i);
         set_update_finger_table(p, s, i);
-    }
-    else {
-        std::cout << "FALSE" << std::endl;
     }
 }
 
@@ -976,7 +988,16 @@ void update_finger_table(int s, int i){
 void update_others(){
     for(int i = 0; i < num_fingers; i++){
         int idx = (n - (1 << i));
+        std::cout << KYEL << "in update_others: " << RST << "before calling find predecessor" << std::endl;
+
+        //check if power of 2
+        if((idx & (idx - 1)) == 0){
+            idx += 1;
+        }
+
         int p = find_predecessor((idx % num_ident + num_ident) % num_ident);
+
+        std::cout << KYEL << "in update_others: " << RST << (idx % num_ident + num_ident) % num_ident << ".predecessor = " << p << std::endl;
         //TODO: refactor to set_update_finger_table(p, n, i);
         set_update_finger_table(p, n, i);
     }
@@ -995,15 +1016,16 @@ void init_finger_table(const int n_prime){
     set_predecessor(successor, n);
     for(int i = 0; i < num_fingers-1; i++){
         if(in_interval(n, finger[i].node, finger[i+1].start, 1, 0)){
-            std::cout << "TRUE" << std::endl;
+            //std::cout << "TRUE" << std::endl;
             finger[i+1].node = finger[i].node;
         }
         else {
-            std::cout << "FALSE" << std::endl;
+            //std::cout << "FALSE" << std::endl;
             //TODO: refactor to get_find_successor(n_prime, finger[i+1].start);
             finger[i+1].node = get_find_successor(n_prime, finger[i+1].start);
         }
     }
+    //show(); //debugging
 }
 
 void show(){
