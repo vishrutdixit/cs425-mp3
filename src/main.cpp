@@ -1162,7 +1162,7 @@ void join_all() {
         unsigned int pid = x.first;
         if(pid != 0) send_join(pid);
         std::cout << "Finished joining " << pid << std::endl;
-        show_all();
+        //show_all();
     }
 }
 

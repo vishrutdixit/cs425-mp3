@@ -50,11 +50,13 @@ For this project, we removed our code pertaining to the key/value store and used
 
 |     | Phase 1: Average # of msgs | Phase 2: Average # of msgs |
 | --- | --- | --- |
-|P=4,  N=?|  |  |
-|P=8,  N=?|  |  |
-|P=10, N=?|  |  |
-|P=20, N=?|  |  |
-|P=30, N=?|  |  |
+|P=4,  N=?| 67.625  | 177.25 |
+|P=8,  N=?| 83.875  | 124.25 |
+|P=10, N=?|  120    | 150.5  |
+|P=20, N=?|  200.65 | 187.75 |
+|P=30, N=?|  342.4  | 225.25 |
+
+The main bottleneck when joining nodes to the network is the update_others function. The number of messages necessary to update other nodes when a new node p is added to the network is expected to increase. We see this trend in our table above; our results seem to follow the log^2(N) rate for joins and log(N) for finds. Because log^2(N) will be larger than log(N) for big values, we see that the average messages sent in Phase 1 is more than Phase 2 for P = 30. This trend seems to extrapolate nicely with our network.
 
 
 ## Partner Work
