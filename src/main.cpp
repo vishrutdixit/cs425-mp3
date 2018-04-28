@@ -105,6 +105,7 @@ void update_finger_table(int s, int i);
 void update_others();
 void init_finger_table(const int n_prime);
 void join(const int n_prime);
+void show();
 
 /**
  * Initializes the unordered_map holding the information needed to connect to each process.
@@ -327,7 +328,7 @@ void delayed_sequencer_msend(int message_id, int fd, int pid){
  * Receives a unicast message
  */
 void unicast_receive(int source, std::string message){
-    std::cout << KGRN << "Process " << process_id << " Received \"" << message << "\" from process " << source <<  ", system time is " << get_time() << RST << std::endl;
+    std::cout << "Process " << process_id << ": " << KGRN << "Received \"" << message << "\" from process " << source <<  ", system time is " << get_time() << RST << std::endl;
 }
 
 /**
@@ -451,6 +452,16 @@ void chord_receive(int source, char* message, int len){
             std::cout << "Got join request with " << source << " from process " << source << std::endl;
             join(source);
             chord_reply(source, 1, 'r');
+        }
+        else if(message[0] == 'h'){
+            std::cout << "Got show request from process " << source << std::endl;
+            show();
+            chord_reply(source, 1, 'r');
+        }
+        else if(message[0] == 'c'){
+            int id = *((int *)(message + 1));
+            std::cout << "Got get_closest_preceding_finger request with " << id << " from process " << source << std::endl;
+            chord_reply(source, closest_preceding_finger(id), 'r');
         }
     }
     else { // Received predecessor reply
@@ -842,6 +853,19 @@ int send_join(const int dest){
 }
 
 /**
+* A "message call" asking a node to join
+*/
+int send_show(const int dest){
+    if(dest == process_id){
+        show();
+    }
+    char message[] = "h";
+    int len = 1;
+    unicast_send_reply(dest, message, len);
+    return reply;
+}
+
+/**
  * Check if an index is in an circular open/closed interval [(a,b)]
  */
 int in_interval(int a, int b, int idx, int a_closed, int b_closed){
@@ -982,6 +1006,23 @@ void init_finger_table(const int n_prime){
     }
 }
 
+void show(){
+    std::cout << process_id << std::endl;
+
+    std::cout << "FingerTable:";
+    for(int i = 0; i < num_fingers; i++){
+        std::cout << " " << finger[i].node;
+    }
+    std::cout << std::endl;
+
+    std::cout << "Keys: [";
+    std::cout << predecessor+1;
+    std::cout << ", ";
+    std::cout << n;
+    std::cout << "]" << std::endl;
+
+}
+
 /**
  * Joins a new node to the Chord network
  * @param n_prime - an arbitrary node in the network
@@ -1065,6 +1106,7 @@ void process_input(){
             sscanf(value_string.c_str(), "%d", &value);
             // TODO: create chord_show function
             // chord_show(value);
+            send_show(value);
         }
     }
     else {
