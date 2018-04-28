@@ -66,12 +66,45 @@ static int counter = 0;
 static int message_counter = 0;
 static bool sequencer = false;
 
+__int64_t ms_start = std::chrono::duration_cast< std::chrono::milliseconds >(std::chrono::system_clock::now().time_since_epoch()).count();
+
+
+// Chord node specific information
 static bool client = false;
 static bool has_reply = false;
 static int reply;
 int predecessor = -1;
 
-__int64_t ms_start = std::chrono::duration_cast< std::chrono::milliseconds >(std::chrono::system_clock::now().time_since_epoch()).count();
+int n; // Chord node identifier
+
+struct finger_info {
+    int start;
+    int node;
+};
+
+static int num_fingers = 8; // Number of fingers in table
+static int num_ident = 1 << num_fingers; // Number of unique identifiers (keys,nodes)
+
+struct finger_info finger[8];
+static int client_id = 0;
+
+// Chord functions
+void delayed_usend_reply(const char* cstr_message, int len, int fd);
+void unicast_send_reply(int dest, const char* message, int len);
+int get_predecessor(const int dest);
+int set_predecessor(const int dest, int id);
+int get_successor(const int dest);
+int get_find_successor(const int dest, int id);
+int get_find_predecessor(const int dest, int id);
+int in_interval(int a, int b, int idx, int a_closed, int b_closed);
+int set_predecessor(int id);
+bool closest_preceding_finger(int id);
+int find_predecessor(int id);
+int find_successor(int id);
+void update_finger_table(int s, int i);
+void update_others();
+void init_finger_table(const int n_prime);
+void join(const int n_prime);
 
 /**
  * Initializes the unordered_map holding the information needed to connect to each process.
@@ -294,7 +327,7 @@ void delayed_sequencer_msend(int message_id, int fd, int pid){
  * Receives a unicast message
  */
 void unicast_receive(int source, std::string message){
-    std::cout << KGRN << "Received \"" << message << "\" from process " << source <<  ", system time is " << get_time() << RST << std::endl;
+    std::cout << KGRN << "Process " << process_id << " Received \"" << message << "\" from process " << source <<  ", system time is " << get_time() << RST << std::endl;
 }
 
 /**
@@ -383,21 +416,47 @@ void chord_reply(int dest, int reply, char protocol){
  * Received a chord message and processes it based on protocol
  */
 void chord_receive(int source, char* message, int len){
-    if(len == 1){ // Received predecessor request
-        std::cout << len << " " << message[0] << std::endl;
+    if(message[0] != 'r'){ // Received predecessor request
         if(message[0] == 'p'){
-            std::cout << len << " " << message[0] << std::endl;
             std::cout << "Got predecessor request from process " << source << std::endl;
-            chord_reply(source, predecessor, 'p');
+            chord_reply(source, predecessor, 'r');
+        }
+        else if(message[0] == 's'){
+            std::cout << "Got successor request from process " << source << std::endl;
+            chord_reply(source, successor, 'r');
+        }
+        else if(message[0] == 'f'){
+            int id = *((int *)(message + 1));
+            std::cout << "Got find_successor request for " << id << " from process " << source << std::endl;
+            chord_reply(source, find_successor(id), 'r');
+        }
+        else if(message[0] == 'F'){
+            int id = *((int *)(message + 1));
+            std::cout << "Got find_predecessor request for " << id << " from process " << source << std::endl;
+            chord_reply(source, find_predecessor(id), 'r');
+        }
+        else if(message[0] == 'P'){
+            int val = *((int *)(message + 1));
+            std::cout << "Got set_predecessor request with " << val << " from process " << source << std::endl;
+            chord_reply(source, set_predecessor(val), 'r');
+        }
+        else if(message[0] == 'U'){
+            int s = *((int *)(message + 1));
+            int i = *((int *)(message + 1 + sizeof(int)));
+            std::cout << "Got set_update_finger_table request with " << s << ", " << i << " from process " << source << std::endl;
+            update_finger_table(s, i);
+            chord_reply(source, 1, 'r');
+        }
+        else if(message[0] == 'j'){
+            std::cout << "Got join request with " << source << " from process " << source << std::endl;
+            join(source);
+            chord_reply(source, 1, 'r');
         }
     }
     else { // Received predecessor reply
-        std::cout << len << " " << message[0] << (message + 1) << std::endl;
-        if(message[0] == 'p'){
-            std::cout << "Got predecessor reply: " << *((int *)(message + 1)) << " from process " << source << std::endl;
-            reply = *((int *) (message + 1));
-            has_reply = true;
-        }
+        reply = *((int *) (message + 1));
+        has_reply = true;
+        std::cout << "Got reply: " << reply << " from process " << source << std::endl;
     }
 }
 
@@ -615,19 +674,9 @@ void setup_connections(){
     }
 }
 
-// Chord node specific information
-int n; // Chord node identifier
-
-struct finger_info {
-    int start;
-    int node;
-};
-
-static int num_fingers = 8; // Number of fingers in table
-static int num_ident = 1 << num_fingers; // Number of unique identifiers (keys,nodes)
-
-struct finger_info finger[8];
-static int client_id = 0;
+/*******************************************************************************************
+ *  Chord functions                                                                        *
+ *******************************************************************************************/
 
 /**
  * Thread function for sending delayed unicast message. Sends particular protocol header and
@@ -665,6 +714,9 @@ void unicast_send_reply(int dest, const char* message, int len){
  * A "message call" asking for a node's predecessor
  */
 int get_predecessor(const int dest){
+    if(dest == process_id){
+        return predecessor;
+    }
     char message[] = "p";
     int len = 1;
     unicast_send_reply(dest, message, len);
@@ -672,10 +724,118 @@ int get_predecessor(const int dest){
 }
 
 /**
+* A "message call" asking a node to set_predecessor
+*/
+int set_predecessor(const int dest, const int id){
+    if(dest == process_id){
+        return set_predecessor(id);
+    }
+    int len = 1 + sizeof(int);
+    char* message = new char[len];
+    message[0] = 'P';
+    memcpy(message+1, &id, sizeof(int));
+
+    unicast_send_reply(dest, message, len);
+    delete[] message;
+
+    return reply;
+}
+
+/**
 * A "message call" asking for a node's successor
 */
 int get_successor(const int dest){
+    if(dest == process_id){
+        return successor;
+    }
     char message[] = "s";
+    int len = 1;
+    unicast_send_reply(dest, message, len);
+    return reply;
+}
+
+/**
+* A "message call" asking for a node's find_successor result
+*/
+int get_find_successor(const int dest, const int id){
+    if(dest == process_id){
+        return find_successor(id);
+    }
+    int len = 1 + sizeof(int);
+    char* message = new char[len];
+    message[0] = 'f';
+    memcpy(message+1, &id, sizeof(int));
+
+    unicast_send_reply(dest, message, len);
+    delete[] message;
+
+    return reply;
+}
+
+/**
+* A "message call" asking for a node's closest_preceding_finger result
+*/
+int get_closest_preceding_finger(const int dest, const int id){
+    if(dest == process_id){
+        return closest_preceding_finger(id);
+    }
+    int len = 1 + sizeof(int);
+    char* message = new char[len];
+    message[0] = 'c';
+    memcpy(message+1, &id, sizeof(int));
+
+    unicast_send_reply(dest, message, len);
+    delete[] message;
+
+    return reply;
+}
+
+/**
+* A "message call" asking for a node's find_predecessor result
+*/
+int get_find_predecessor(const int dest, const int id){
+    if(dest == process_id){
+        return find_predecessor(id);
+    }
+    int len = 1 + sizeof(int);
+    char* message = new char[len];
+    message[0] = 'F';
+    memcpy(message+1, &id, sizeof(int));
+
+    unicast_send_reply(dest, message, len);
+    delete[] message;
+
+    return reply;
+}
+
+/**
+* A "message call" asking a node to set_predecessor
+*/
+int set_update_finger_table(const int dest, const int s, const int i){
+    if(dest == process_id){
+        update_finger_table(s,i);
+        return 1;
+    }
+    int len = 1 + 2*sizeof(int);
+    char* message = new char[len];
+    message[0] = 'U';
+    memcpy(message+1, &s, sizeof(int));
+    memcpy(message+1+sizeof(int), &i, sizeof(int));
+
+    unicast_send_reply(dest, message, len);
+    delete[] message;
+
+    return reply;
+}
+
+/**
+* A "message call" asking a node to join
+*/
+int send_join(const int dest){
+    if(dest == process_id){
+        return 0;
+    }
+    char message[] = "j";
     int len = 1;
     unicast_send_reply(dest, message, len);
     return reply;
@@ -685,6 +845,7 @@ int get_successor(const int dest){
  * Check if an index is in an circular open/closed interval [(a,b)]
  */
 int in_interval(int a, int b, int idx, int a_closed, int b_closed){
+    std::cout << "check: " << idx << " between " << (a_closed ? "[" : "(") << a << ", " << b << (b_closed ? "]" : ")") << " = ";
     if (a == b) return true; // TODO: check this condition later
     if(a_closed && b_closed){
         if(a > b){
@@ -718,6 +879,14 @@ int in_interval(int a, int b, int idx, int a_closed, int b_closed){
 }
 
 /**
+ * Sets the predecessor value
+ */
+int set_predecessor(const int id){
+    predecessor = id;
+    return predecessor;
+}
+
+/**
  *  Return closest finger preceding id
  */
 bool closest_preceding_finger(int id){
@@ -725,7 +894,7 @@ bool closest_preceding_finger(int id){
    //1. Check finger[i] for i = 7 to 0
    //2. If n < finger[i] < id, return finger[i]
    for(int i = 7; i >= 0; i--){
-       if(n < finger[i].node < id){
+       if(n < finger[i].node && finger[i].node < id){
            return finger[i].node;
        }
    }
@@ -738,26 +907,15 @@ bool closest_preceding_finger(int id){
 int find_predecessor(int id){
     //TODO:
     //1. n' = n
-    //2. while(n' < id < n'.succesor):
+    //2. while(n' < id < n'.successor):
     //3.    n' = n'.closest_preceding_finger(id)
     //4. return n'
     int pred = n;
 
     //check in interval (n',n'.successor]
-    while(!(in_interval(pred,successor,id,0,1))){
-        if(pred == n){
-            pred = closest_preceding_finger(id);
-            //std::cout << "closest preceding finger is: " << pred << std::endl;
-        }
-        else{
-            //send message to ask node pred to find its closest preceding finger
-            char* pred_req = create_message((char*)NULL,0,'p');
-            delayed_usend(pred_req, 1, pred);
-            //pred = response from process pred
-
-        }
+    while(!(in_interval(pred,get_successor(pred),id,0,1))){
+        pred = get_closest_preceding_finger(pred, id);
     }
-    std::cout << "returning predecessor as: " << pred << std::endl;
     return pred;
 }
 
@@ -769,16 +927,7 @@ int find_successor(int id){
     //1. n' = find_predecessor(id)
     //2. return n'.successor;
     int pred = find_predecessor(id);
-    if(pred == n){
-        return successor;
-    }
-    else{
-        //send message to find node pred's successor
-        char* suc_req = create_message((char*)NULL,0,'s');
-        delayed_usend(suc_req,1,pred);
-        //wait for response and return
-    }
-    return 0;
+    return get_successor(pred);
 }
 
 /**
@@ -786,10 +935,14 @@ int find_successor(int id){
  */
 void update_finger_table(int s, int i){
     if(in_interval(n, finger[i].node, s, 1, 0)){
+        std::cout << "TRUE" << std::endl;
         finger[i].node = s;
         int p = predecessor;
-        //TODO: refactor to send_update_finger_table(p, s, i);
-        // p.update_finger_table(s,i);
+        //TODO: refactor to set_update_finger_table(p, s, i);
+        set_update_finger_table(p, s, i);
+    }
+    else {
+        std::cout << "FALSE" << std::endl;
     }
 }
 
@@ -798,9 +951,10 @@ void update_finger_table(int s, int i){
  */
 void update_others(){
     for(int i = 0; i < num_fingers; i++){
-        int p = find_predecessor((n - (1 << i)) % 256);
-        //TODO: refactor to send_update_finger_table(p, n, i);
-        // p.update_finger_table(n, i);
+        int idx = (n - (1 << i));
+        int p = find_predecessor((idx % num_ident + num_ident) % num_ident);
+        //TODO: refactor to set_update_finger_table(p, n, i);
+        set_update_finger_table(p, n, i);
     }
 }
 
@@ -810,18 +964,20 @@ void update_others(){
  */
 void init_finger_table(const int n_prime){
     //TODO: refactor to get_find_successor(n_prime, finger[0].start);
-    // finger[0].node = n_prime.find_successor(finger[0].start);
+    finger[0].node = get_find_successor(n_prime, finger[0].start);
     //TODO: refactor to get_predecessor(successor);
-    // predecessor = successor.predecessor;
-    //TODO: refactor to update_predecessor(successor, n);
-    // successor.predecessor = n;
+    predecessor = get_predecessor(successor);
+    //TODO: refactor to set_predecessor(successor, n);
+    set_predecessor(successor, n);
     for(int i = 0; i < num_fingers-1; i++){
         if(in_interval(n, finger[i].node, finger[i+1].start, 1, 0)){
+            std::cout << "TRUE" << std::endl;
             finger[i+1].node = finger[i].node;
         }
         else {
+            std::cout << "FALSE" << std::endl;
             //TODO: refactor to get_find_successor(n_prime, finger[i+1].start);
-            // finger[i+1].node = n_prime.find_successor(finger[i+1].start);
+            finger[i+1].node = get_find_successor(n_prime, finger[i+1].start);
         }
     }
 }
@@ -831,6 +987,7 @@ void init_finger_table(const int n_prime){
  * @param n_prime - an arbitrary node in the network
  */
 void join(const int n_prime){
+    n = process_id;
     // Just checks if n_prime is valid
     if(n_prime >= 0 && n_prime <= 31){
         for(int i = 0; i < num_fingers; i++){
@@ -883,9 +1040,7 @@ void process_input(){
         value_string = line.substr(space1_idx+1,  std::string::npos);
         sscanf(value_string.c_str(), "%d", &value);
         // TODO: create chord_join function
-        // chord_join(value);
-        get_predecessor(2);
-
+        send_join(value);
     }
     else if(command.compare("find") == 0){
         value_string = line.substr(space1_idx+1, space2_idx-space1_idx-1);
