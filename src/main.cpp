@@ -990,10 +990,9 @@ void update_others(){
         int idx = (n - (1 << i));
         std::cout << KYEL << "in update_others: " << RST << "before calling find predecessor" << std::endl;
 
-        //check if power of 2
-        if((idx & (idx - 1)) == 0){
-            idx += 1;
-        }
+        //necessary to get correct pred
+        idx += 1;
+
 
         int p = find_predecessor((idx % num_ident + num_ident) % num_ident);
 
