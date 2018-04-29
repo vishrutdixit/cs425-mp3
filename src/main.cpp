@@ -5,6 +5,7 @@
 #include <mutex>
 #include <chrono>
 #include <future>
+#include <random>
 
 #include <stdio.h>
 #include <signal.h>
@@ -74,6 +75,7 @@ static bool client = false;
 static bool has_reply = false;
 static int reply;
 int predecessor = -1;
+std::vector<int> chord_nodes;
 
 static int n = -1; // Chord node identifier
 
@@ -1023,7 +1025,6 @@ int find_successor(int id){
  * Update all nodes whose finger tables should refer to node n
  */
 void update_finger_table(int s, int i){
-    std::cout << s << std::endl;
     // std::cout << "is " << s << " the " << i << "th finger table index of process " << process_id << "?" << std::endl;
     if(in_interval(n, finger[i].node, s, 0, 0)){
         finger[i].node = s;
@@ -1162,7 +1163,22 @@ void join_all() {
         unsigned int pid = x.first;
         if(pid != 0) send_join(pid);
         std::cout << "Finished joining " << pid << std::endl;
-        show_all();
+        usleep(1000000);
+    }
+}
+/**
+ * Send a find request to random processes
+ */
+void find_all() {
+    std::random_device rd;     // only used once to initialise (seed) engine
+    std::mt19937 rng(rd());    // random-number engine used (Mersenne-Twister in this case)
+    std::uniform_int_distribution<int> uni1(0, chord_nodes.size()-1); // guaranteed unbiased
+    std::uniform_int_distribution<int> uni2(0,255); // guaranteed unbiased
+    for(int i = 0; i < 128; i++){
+        int pid = chord_nodes.at(uni1(rng));
+        int id = uni2(rng);
+        int res = get_find_successor(pid, id);
+        std::cout << "Finished find " << pid <<  " " << id << " = " << res << std::endl;
     }
 }
 
@@ -1206,18 +1222,25 @@ void process_input(){
             sscanf(value_string.c_str(), "%d", &value);
             // TODO: create chord_join function
             send_join(value);
+            chord_nodes.push_back(value);
         }
     }
     else if(command.compare("find") == 0){
         value_string = line.substr(space1_idx+1, space2_idx-space1_idx-1);
-        sscanf(value_string.c_str(), "%d", &value);
-        int val1 = value;
-        value_string = line.substr(space2_idx + 1, std::string::npos);
-        sscanf(value_string.c_str(), "%d", &value);
-        int val2 = value;
-        // TODO: create chord_find function
-        int res = get_find_successor(val1, val2);
-        std::cout << "find " << val1 << " " << val2 << " = " << res << std::endl;
+        if(value_string.compare("all") == 0){
+            // TODO: create find_all function
+            find_all();
+        }
+        else {
+            sscanf(value_string.c_str(), "%d", &value);
+            int val1 = value;
+            value_string = line.substr(space2_idx + 1, std::string::npos);
+            sscanf(value_string.c_str(), "%d", &value);
+            int val2 = value;
+            // TODO: create chord_find function
+            int res = get_find_successor(val1, val2);
+            std::cout << "find " << val1 << " " << val2 << " = " << res << std::endl;
+        }
     }
     else if(command.compare("crash") == 0){
         value_string = line.substr(space1_idx+1,  std::string::npos);
@@ -1289,6 +1312,7 @@ int main(int argc, char **argv) {
         setup_connections();
         n = process_id;
         join(-1);
+        chord_nodes.push_back(n);
     }
     decisions = new std::unordered_map<int, int>[processes.size()];
 
